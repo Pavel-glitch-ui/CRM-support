@@ -7,7 +7,8 @@ import { aggregateBitrixMetrics, aggregateAmoMetrics } from '../../crm/aggregato
 import { performBusinessAudit } from '../../ai/agent';
 import { searchWeb } from '../../ai/tools/search';
 import { BusinessMetrics } from '../../types';
-import { sendSafeText, sendAuditTxtFile } from '../../utils/telegram';
+import { sendSafeText, sendAuditTxtFile, sendAuditPdfFile } from '../../utils/telegram';
+import { generateAuditPdf } from '../../services/pdf';
 
 /**
  * 1. Получение экспресс-метрик по 50 последним измененным сделкам
@@ -139,17 +140,29 @@ export async function handleRecentAudit(ctx: Context) {
       await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
     } catch (_) { }
 
-    // Отправляем текстовый отчет (с авто-разбиением, если превышает лимит)
+    // 1. Отправляем текстовое резюме аудита в чат
     await sendSafeText(ctx, fullReportText);
 
-    // Прикрепляем файл полного отчета .txt для удобства сохранения/пересылки
-    await sendAuditTxtFile(
-      ctx,
-      fullReportText,
-      `CRM_Recent_Audit_${metrics.portalOrDomain || 'Report'}`,
-      `📋 *Полный экспресс-аудит (последние 50 сделок) прикреплен в файле выше.*\n\n_Задайте вопрос ИИ по отчету через кнопку ниже:_`,
-      Keyboards.afterAuditMenu
-    );
+    // 2. Генерируем и прикрепляем брендированный PDF-документ
+    try {
+      const pdfBuffer = await generateAuditPdf(metrics, fullReportText, session.niche);
+      await sendAuditPdfFile(
+        ctx,
+        pdfBuffer,
+        `CRM_Recent_Audit_${metrics.portalOrDomain || 'Report'}`,
+        `📄 *Официальный PDF-отчет экспресс-аудита прикреплен выше.*\n\n_Задайте вопрос ИИ по отчету через кнопку ниже:_`,
+        Keyboards.afterAuditMenu
+      );
+    } catch (pdfErr: any) {
+      console.warn('[PDF Generation Warning] Падение PDF, отправляем .txt резерв:', pdfErr.message);
+      await sendAuditTxtFile(
+        ctx,
+        fullReportText,
+        `CRM_Recent_Audit_${metrics.portalOrDomain || 'Report'}`,
+        `📋 *Полный экспресс-аудит (последние 50 сделок) прикреплен в файле выше.*\n\n_Задайте вопрос ИИ по отчету через кнопку ниже:_`,
+        Keyboards.afterAuditMenu
+      );
+    }
   } catch (error: any) {
     console.error('[Recent Audit Error]', error);
     try {
@@ -238,16 +251,29 @@ export async function handleFullStreamAudit(ctx: Context) {
       await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
     } catch (_) { }
 
-    // Отправляем текстовый отчет (с авто-разбиением при превышении лимита)
+    // 1. Отправляем текстовый отчет
     await sendSafeText(ctx, fullReportText);
 
-    await sendAuditTxtFile(
-      ctx,
-      fullReportText,
-      `CRM_Full_Strategic_Audit_${metrics.portalOrDomain || 'Report'}`,
-      `📋 *Полный стратегический аудит всей базы прикреплен в файле выше.*\n\n_Задайте вопрос ИИ по отчету через кнопку ниже:_`,
-      Keyboards.afterAuditMenu
-    );
+    // 2. Генерируем и прикрепляем брендированный PDF-документ всей базы
+    try {
+      const pdfBuffer = await generateAuditPdf(metrics, fullReportText, session.niche);
+      await sendAuditPdfFile(
+        ctx,
+        pdfBuffer,
+        `CRM_Full_Strategic_Audit_${metrics.portalOrDomain || 'Report'}`,
+        `📄 *Официальный PDF-отчет стратегического аудита всей базы CRM прикреплен выше.*\n\n_Задайте вопрос ИИ по отчету через кнопку ниже:_`,
+        Keyboards.afterAuditMenu
+      );
+    } catch (pdfErr: any) {
+      console.warn('[PDF Generation Warning] Падение PDF, отправляем .txt резерв:', pdfErr.message);
+      await sendAuditTxtFile(
+        ctx,
+        fullReportText,
+        `CRM_Full_Strategic_Audit_${metrics.portalOrDomain || 'Report'}`,
+        `📋 *Полный стратегический аудит всей базы прикреплен в файле выше.*\n\n_Задайте вопрос ИИ по отчету через кнопку ниже:_`,
+        Keyboards.afterAuditMenu
+      );
+    }
   } catch (error: any) {
     console.error('[Full Stream Audit Error]', error);
     try {

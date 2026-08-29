@@ -33,7 +33,33 @@ function sanitizeAssistantResponse(text: string | null | undefined): string {
 }
 
 /**
- * Запуск ИИ-агента с каскадным перебором моделей (Pre-Search Prompt-Driven Engine)
+ * Компактизация метрик CRM в сжатый структурированный текст (~300 токенов вместо 2500+)
+ */
+export function formatMetricsForPrompt(metrics: BusinessMetrics): string {
+  const { summary, lostReasons, managers, tasks } = metrics;
+
+  const topLost = lostReasons.slice(0, 3).map(r => `${r.reason} (${r.count} шт.)`).join(', ') || 'Не указаны';
+  const topManagers = managers.slice(0, 4).map(m =>
+    `• ${m.name}: Выручка ${m.totalRevenue.toLocaleString('ru-RU')} ₽, Сделок ${m.dealsCount}, Win Rate ${m.winRatePercent}%, Просрочек: ${m.overdueTasksCount}`
+  ).join('\n') || 'Данные отсутствуют';
+
+  return `📊 ВОРОНКА СДЕЛОК:
+• Всего сделок: ${summary.totalDeals}
+• Успешно закрыто: ${summary.wonDeals} (Win Rate: ${summary.winRatePercent}%)
+• Проиграно: ${summary.lostDeals} | В работе прямо сейчас: ${summary.inProgressDeals}
+• Выручка факт: ${summary.totalRevenue.toLocaleString('ru-RU')} ₽
+• Пайплайн в работе: ${summary.pipelineValue.toLocaleString('ru-RU')} ₽
+• Средний чек: ${summary.averageCheck.toLocaleString('ru-RU')} ₽
+• Зависшие сделки (>14 дней без движения): ${summary.stuckDealsCount} шт.
+• Топ причин отказов: ${topLost}
+
+👥 КОМАНДА И ДИСЦИПЛИНА:
+${topManagers}
+• Задачи: Всего ${tasks.total} шт., Просрочено ${tasks.overdue} (${tasks.overduePercent}%)`;
+}
+
+/**
+ * Запуск ИИ-агента со стримингом и Fail-Fast таймаутом (12 сек на первый токен)
  */
 export async function runAgent({
   messages,
@@ -54,26 +80,50 @@ export async function runAgent({
 
   for (let i = 0; i < models.length; i++) {
     const currentModel = models[i];
-    console.log(`[AI Agent] Запрос к модели [${i + 1}/${models.length}]: ${currentModel}`);
+    console.log(`[AI Agent] Запрос к модели [${i + 1}/${models.length}]: ${currentModel} (Streaming ⚡)`);
 
     if (onModelSwitch && i > 0) {
       onModelSwitch(currentModel, i);
     }
 
     try {
-      const response = await openai.chat.completions.create({
-        model: currentModel,
-        messages: conversation,
-        temperature: 0.4,
-      });
+      const abortController = new AbortController();
+      let firstTokenReceived = false;
 
-      const choice = response.choices && response.choices[0];
-      if (!choice || !choice.message) {
-        throw new Error('Пустой ответ от модели');
+      // Fail-Fast: таймаут 12 секунд на получение первого токена
+      const timeoutId = setTimeout(() => {
+        if (!firstTokenReceived) {
+          console.warn(`[AI Agent] Модель ${currentModel} не ответила за 12с (Fail-Fast), переключаем...`);
+          abortController.abort();
+        }
+      }, 12000);
+
+      const stream = await openai.chat.completions.create(
+        {
+          model: currentModel,
+          messages: conversation,
+          temperature: 0.4,
+          stream: true,
+        },
+        {
+          signal: abortController.signal,
+        }
+      );
+
+      let accumulatedText = '';
+
+      for await (const chunk of stream) {
+        if (!firstTokenReceived) {
+          firstTokenReceived = true;
+          clearTimeout(timeoutId);
+        }
+        const delta = chunk.choices[0]?.delta?.content || '';
+        accumulatedText += delta;
       }
 
-      const content = choice.message.content || '';
-      const cleanText = sanitizeAssistantResponse(content);
+      clearTimeout(timeoutId);
+
+      const cleanText = sanitizeAssistantResponse(accumulatedText);
 
       // Проверяем, что ответ не является короткой отпиской-заглушкой
       const isIntroStub = cleanText.length < 250 && (
@@ -92,7 +142,7 @@ export async function runAgent({
 
       throw new Error('Модель вернула вводную заглушку или слишком короткий текст');
     } catch (error: any) {
-      console.error(`[AI Agent] Ошибка с моделью ${currentModel}:`, error.message);
+      console.error(`[AI Agent] Ошибка/таймаут с моделью ${currentModel}:`, error.message);
       lastError = error;
     }
   }
@@ -108,7 +158,7 @@ export async function runAgent({
 }
 
 /**
- * Проведение полного бизнес-аудита по метрикам с Pre-Search RAG
+ * Проведение полного бизнес-аудита по метрикам с Pre-Search RAG и сжатием промпта
  */
 export async function performBusinessAudit(
   metrics: BusinessMetrics,
@@ -120,9 +170,9 @@ export async function performBusinessAudit(
     ? 'ЭКСПРЕСС-АУДИТ ТЕКУЩЕГО ПУЛЬСА ПРОДАЖ (По выборке 50 последних измененных сделок)'
     : 'ГЛОБАЛЬНЫЙ СТРАТЕГИЧЕСКИЙ АУДИТ ВСЕЙ БАЗЫ CRM (Полный срез)';
 
-  // 1. Pre-Search RAG: Автоматический сбор свежих отраслевых бенчмарков по нише
+  // 1. Pre-Search RAG: Быстрый сбор 2-3 ключевых отраслевых бенчмарков по нише
   const performedSearches: string[] = [];
-  let benchmarksContext = 'Отраслевые бенчмарки: используются стандартные нормы B2B/B2C продаж.';
+  let benchmarksContext = 'Отраслевые нормы: стандартные показатели воронки B2B/B2C продаж.';
 
   if (niche && niche !== 'Не указана') {
     const searchQuery = `средняя конверсия воронки продаж ${niche} бенчмарки средний чек`;
@@ -130,25 +180,28 @@ export async function performBusinessAudit(
     performedSearches.push(searchQuery);
 
     try {
-      const searchResults = await searchWeb(searchQuery, config.search.maxResults);
+      const searchResults = await searchWeb(searchQuery, 2);
       if (searchResults && searchResults.length > 0) {
         benchmarksContext = searchResults
-          .map((r, idx) => `[Источник ${idx + 1}: ${r.title}]\n${r.snippet}`)
-          .join('\n\n');
+          .slice(0, 2)
+          .map((r, idx) => `• ${r.title}: ${r.snippet}`)
+          .join('\n');
       }
     } catch (e: any) {
       console.warn(`[Pre-Search RAG] Поиск не удался:`, e.message);
     }
   }
 
-  // 2. Формирование обогащенного промпта со всеми данными (CRM + Рынок)
+  // 2. Сжатие и структурирование метрик CRM
+  const formattedMetrics = formatMetricsForPrompt(metrics);
+
+  // 3. Формирование компактного обогащенного промпта (~300 токенов)
   const userPrompt = `Проведи ${scopeTitle} на основе следующих данных:
 
 СФЕРА БИЗНЕСА: ${niche}
 ТИП ВЫБОРКИ: ${isRecent ? '50 последних активных сделок (недавние изменения)' : 'Вся база CRM'}
 
-📊 МЕТРИКИ ИЗ CRM:
-${JSON.stringify(metrics, null, 2)}
+${formattedMetrics}
 
 🌐 АКТУАЛЬНЫЕ РЫНОЧНЫЕ БЕНЧМАРКИ ПО НИШЕ "${niche}":
 ${benchmarksContext}

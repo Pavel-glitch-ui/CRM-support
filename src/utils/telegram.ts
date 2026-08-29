@@ -118,3 +118,34 @@ export async function sendAuditTxtFile(
     }
   );
 }
+
+/**
+ * Отправка полного отчета в виде брендированного PDF-документа
+ */
+export async function sendAuditPdfFile(
+  ctx: Context,
+  pdfBuffer: Buffer,
+  filenamePrefix = 'CRM_Business_Audit',
+  caption = '📄 *Ваш официальный PDF-отчет аудита CRM готов!*',
+  extra: any = {}
+): Promise<void> {
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const cleanPrefix = filenamePrefix.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const filename = `${cleanPrefix}_${dateStr}.pdf`;
+
+  const safeCaption = caption.length > MAX_CAPTION_LENGTH
+    ? caption.slice(0, MAX_CAPTION_LENGTH - 3) + '...'
+    : caption;
+
+  await ctx.replyWithDocument(
+    {
+      source: pdfBuffer,
+      filename,
+    },
+    {
+      caption: safeCaption,
+      parse_mode: 'Markdown',
+      ...extra,
+    }
+  );
+}
