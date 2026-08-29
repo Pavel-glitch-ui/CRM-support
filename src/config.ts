@@ -23,6 +23,7 @@ export const config = {
 
   // Каскадный список бесплатных моделей OpenRouter (fallback chain)
   models: [
+    'openrouter/free',
     'google/gemma-4-31b-it:free',
     'inclusionai/ling-3.0-flash-fin:free',
     'z-ai/glm-5.2:free',

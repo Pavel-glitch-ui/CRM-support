@@ -21,6 +21,80 @@ if (config.proxyAgent) {
 const openai = new OpenAI(openaiOptions);
 
 /**
+ * Извлечение вызовов инструментов из текстового контента (псевдо-XML, JSON-теги)
+ */
+function extractToolCallsFromText(content: string): Array<{ name: string; query: string }> {
+  if (!content) return [];
+  const results: Array<{ name: string; query: string }> = [];
+
+  // 1. Паттерн Nemotron / Laguna: <toolcall><function=searchweb><parameter=query>...</parameter></function></toolcall>
+  const xmlPattern = /<toolcall>[\s\S]*?<function=([^>]+)>[\s\S]*?<parameter=query>([\s\S]*?)<\/parameter>[\s\S]*?<\/toolcall>/gi;
+  let match;
+  while ((match = xmlPattern.exec(content)) !== null) {
+    const fnName = match[1].trim();
+    const query = match[2].trim();
+    if (query) {
+      results.push({ name: fnName, query });
+    }
+  }
+
+  // 2. Паттерн Hermes / Qwen: <tool_call>{"name":"search_web","arguments":{"query":"..."}}</tool_call>
+  const toolCallTagPattern = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
+  while ((match = toolCallTagPattern.exec(content)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1].trim());
+      const fnName = parsed.name || parsed.function || 'search_web';
+      let query = '';
+      if (typeof parsed.arguments === 'object') {
+        query = parsed.arguments.query || parsed.arguments.q || '';
+      } else if (typeof parsed.arguments === 'string') {
+        try {
+          const argObj = JSON.parse(parsed.arguments);
+          query = argObj.query || argObj.q || parsed.arguments;
+        } catch (_) {
+          query = parsed.arguments;
+        }
+      } else if (parsed.query) {
+        query = parsed.query;
+      }
+      if (query) {
+        results.push({ name: fnName, query: query.trim() });
+      }
+    } catch (_) {}
+  }
+
+  // 3. Паттерн [TOOL_CALLS] [...]
+  const toolCallsBracketPattern = /\[TOOL_CALLS\]\s*(\[\s*\{[\s\S]*?\}\s*\]|\{[\s\S]*?\})/gi;
+  while ((match = toolCallsBracketPattern.exec(content)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1].trim());
+      const items = Array.isArray(parsed) ? parsed : [parsed];
+      for (const item of items) {
+        const fnName = item.name || item.function || 'search_web';
+        const query = item.arguments?.query || item.query || '';
+        if (query) {
+          results.push({ name: fnName, query: String(query).trim() });
+        }
+      }
+    } catch (_) {}
+  }
+
+  return results;
+}
+
+/**
+ * Очистка итогового текста от остаточных служебных тегов
+ */
+function sanitizeAssistantResponse(text: string | null | undefined): string {
+  if (!text) return '';
+  return text
+    .replace(/<toolcall>[\s\S]*?<\/toolcall>/gi, '')
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+    .replace(/\[TOOL_CALLS\][\s\S]*?(?=\n\n|$)/gi, '')
+    .trim();
+}
+
+/**
  * Запуск ИИ-агента с каскадным перебором моделей
  */
 export async function runAgent({
@@ -85,10 +159,11 @@ export async function runAgent({
       }
 
       const responseMessage = choice.message;
+      const content = responseMessage.content || '';
 
-      // Обработка вызова инструментов
+      // 1. Проверка нативного формата OpenAI tool_calls
       if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
-        console.log(`[AI Agent] Модель запросила вызов инструментов (${responseMessage.tool_calls.length})`);
+        console.log(`[AI Agent] Нативный Tool Call обнаружен (${responseMessage.tool_calls.length})`);
         conversation.push(responseMessage);
 
         for (const toolCall of responseMessage.tool_calls) {
@@ -126,17 +201,66 @@ export async function runAgent({
         const finalText = finalChoice && finalChoice.message ? finalChoice.message.content : '';
 
         return {
-          text: finalText || 'Анализ завершен.',
+          text: sanitizeAssistantResponse(finalText) || 'Анализ завершен.',
           modelUsed: currentModel,
           searches: performedSearches,
         };
       }
 
-      return {
-        text: responseMessage.content || '',
-        modelUsed: currentModel,
-        searches: performedSearches,
-      };
+      // 2. Проверка текстовых псевдо-тегов (<toolcall>, <tool_call>, [TOOL_CALLS])
+      const extractedToolCalls = extractToolCallsFromText(content);
+      if (extractedToolCalls.length > 0) {
+        console.log(`[AI Agent] Перехвачен текстовый вызов инструмента (${extractedToolCalls.length})`);
+        
+        let hasNewData = false;
+        for (const extracted of extractedToolCalls) {
+          const query = extracted.query;
+          if (query && !performedSearches.includes(query)) {
+            console.log(`[AI Agent] Выполняем поиск по перехваченному запросу: "${query}"`);
+            performedSearches.push(query);
+            const searchResults = await searchWeb(query, config.search.maxResults);
+
+            conversation.push({
+              role: 'assistant',
+              content: responseMessage.content,
+            });
+
+            conversation.push({
+              role: 'user',
+              content: `[Результаты веб-поиска по рынку (${query})]:\n${JSON.stringify(searchResults, null, 2)}\n\nПожалуйста, используя эти найденные отраслевые бенчмарки и исходные метрики CRM, сформируй полный структурированный отчет аудита для собственника бизнеса.`,
+            });
+            hasNewData = true;
+          }
+        }
+
+        if (hasNewData) {
+          const finalResponse = await openai.chat.completions.create({
+            model: currentModel,
+            messages: conversation,
+            temperature: 0.4,
+          });
+
+          const finalChoice = finalResponse.choices && finalResponse.choices[0];
+          const finalText = finalChoice && finalChoice.message ? finalChoice.message.content : '';
+
+          return {
+            text: sanitizeAssistantResponse(finalText) || 'Анализ завершен.',
+            modelUsed: currentModel,
+            searches: performedSearches,
+          };
+        }
+      }
+
+      const cleanText = sanitizeAssistantResponse(content);
+      if (cleanText) {
+        return {
+          text: cleanText,
+          modelUsed: currentModel,
+          searches: performedSearches,
+        };
+      }
+
+      throw new Error('Модель вернула только служебные теги без содержательного текста');
     } catch (error: any) {
       console.error(`[AI Agent] Ошибка с моделью ${currentModel}:`, error.message);
       lastError = error;
