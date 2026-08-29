@@ -23,11 +23,11 @@ export const config = {
 
   // Каскадный список бесплатных моделей OpenRouter (fallback chain)
   models: [
-    'nvidia/nemotron-3-ultra-550b-a55b:free',
-    'poolside/laguna-s-2.1:free',
-    'minimax/minimax-m3:free',
-    'dots-studio/dots-3-note-preview:free',
+    'openrouter/free',
+    'google/gemma-4-31b-it:free',
     'inclusionai/ling-3.0-flash-fin:free',
+    'z-ai/glm-5.2:free',
+    'minimax/minimax-m3:free'
   ],
 
   search: {
