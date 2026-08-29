@@ -11,7 +11,12 @@ export const Keyboards = {
   // Главное аналитическое меню
   mainMenu: (hasMetrics: boolean = false) =>
     Markup.inlineKeyboard([
-      [Markup.button.callback('🚀 Полный ИИ-аудит бизнеса', 'action_full_audit')],
+      [
+        Markup.button.callback('⚡ Экспресс-аудит (последние 50)', 'action_recent_audit'),
+      ],
+      [
+        Markup.button.callback('🚀 Полный аудит всей базы (Chunked)', 'action_full_stream_audit'),
+      ],
       [
         Markup.button.callback('📊 Экспресс-дашборд', 'action_dashboard'),
         Markup.button.callback('👥 Аудит команды', 'action_managers'),

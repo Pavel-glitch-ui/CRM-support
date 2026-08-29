@@ -1,8 +1,6 @@
 import { Context } from 'telegraf';
 import { state } from '../../state';
 import { Keyboards } from '../keyboards';
-import { Bitrix24Client } from '../../crm/bitrix24';
-import { AmoCrmClient } from '../../crm/amocrm';
 
 export async function handleConnectBitrix(ctx: Context) {
   const chatId = ctx.chat?.id;

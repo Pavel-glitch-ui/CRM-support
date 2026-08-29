@@ -9,45 +9,78 @@ import { searchWeb } from '../../ai/tools/search';
 import { BusinessMetrics } from '../../types';
 
 /**
- * Получение свежих или кэшированных метрик из CRM
+ * 1. Получение экспресс-метрик по 50 последним измененным сделкам
  */
-async function getOrFetchMetrics(chatId: string | number): Promise<BusinessMetrics | null> {
+async function fetchRecentMetrics(chatId: string | number): Promise<BusinessMetrics | null> {
   const session = state.get(chatId);
-  if (session.metricsCache) {
-    return session.metricsCache;
-  }
 
   if (!session.crmType || !session.credentials) {
-    return null;
+    return session.metricsCache || null;
   }
 
   try {
     if (session.crmType === 'bitrix24') {
       const creds = session.credentials as { webhookUrl: string };
       const client = new Bitrix24Client(creds.webhookUrl);
-      const rawData = await client.fetchAllData();
-      const metrics = aggregateBitrixMetrics(rawData, creds.webhookUrl);
+      const rawData = await client.fetchRecentData(50);
+      const metrics = aggregateBitrixMetrics(rawData, creds.webhookUrl, 'recent');
       state.setMetrics(chatId, metrics);
       return metrics;
     } else if (session.crmType === 'amocrm') {
       const creds = session.credentials as { domain: string; token: string };
       const client = new AmoCrmClient(creds.domain, creds.token);
-      const rawData = await client.fetchAllData();
-      const metrics = aggregateAmoMetrics(rawData, creds.domain);
+      const rawData = await client.fetchRecentData(50);
+      const metrics = aggregateAmoMetrics(rawData, creds.domain, 'recent');
       state.setMetrics(chatId, metrics);
       return metrics;
     }
   } catch (error: any) {
-    console.error(`[Metrics Fetch] Ошибка сбора данных из CRM:`, error.message);
+    console.error(`[Recent Metrics Fetch] Ошибка сбора данных:`, error.message);
   }
 
-  return null;
+  return session.metricsCache || null;
 }
 
 /**
- * Полный ИИ-аудит бизнеса
+ * 2. Потоковая выгрузка всей базы чанками с пагинацией
  */
-export async function handleFullAudit(ctx: Context) {
+async function fetchFullChunkedMetrics(
+  chatId: string | number,
+  onProgress?: (loadedCount: number, totalCount: number | null, chunkIndex: number) => Promise<void> | void
+): Promise<BusinessMetrics | null> {
+  const session = state.get(chatId);
+
+  if (!session.crmType || !session.credentials) {
+    return session.metricsCache || null;
+  }
+
+  try {
+    if (session.crmType === 'bitrix24') {
+      const creds = session.credentials as { webhookUrl: string };
+      const client = new Bitrix24Client(creds.webhookUrl);
+      const rawData = await client.fetchChunkedData(onProgress, 500);
+      const metrics = aggregateBitrixMetrics(rawData, creds.webhookUrl, 'full');
+      state.setMetrics(chatId, metrics);
+      return metrics;
+    } else if (session.crmType === 'amocrm') {
+      const creds = session.credentials as { domain: string; token: string };
+      const client = new AmoCrmClient(creds.domain, creds.token);
+      const rawData = await client.fetchChunkedData(onProgress, 500);
+      const metrics = aggregateAmoMetrics(rawData, creds.domain, 'full');
+      state.setMetrics(chatId, metrics);
+      return metrics;
+    }
+  } catch (error: any) {
+    console.error(`[Full Stream Fetch] Ошибка потокового сбора:`, error.message);
+  }
+
+  return session.metricsCache || null;
+}
+
+/**
+ * РЕЖИМ 1: Экспресс-аудит (последние 50 активных сделок)
+ */
+export async function handleRecentAudit(ctx: Context) {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
 
@@ -58,39 +91,38 @@ export async function handleFullAudit(ctx: Context) {
   }
 
   const statusMsg = await ctx.reply(
-    `⏳ *ИИ-Агент начинает аудит бизнеса...*\n\n` +
-    `1. 📊 Сбор и расчет метрик воронки\n` +
-    `2. 🔍 Поиск отраслевых бенчмарков в интернете (DuckDuckGo)\n` +
-    `3. 🧠 Формирование отчета и плана Quick Wins\n\n` +
-    `_Пожалуйста, подождите 5–15 секунд..._`,
+    `⚡ *ИИ-Агент начинает экспресс-аудит...*\n\n` +
+    `📥 Выгружаю 50 последних измененных сделок...\n` +
+    `_Пожалуйста, подождите пару секунд..._`,
     { parse_mode: 'Markdown' }
   );
 
   try {
-    const metrics = await getOrFetchMetrics(chatId);
+    const metrics = await fetchRecentMetrics(chatId);
     if (!metrics) {
       try {
         await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
       } catch (_) {}
-      await ctx.reply(`❌ Не удалось выгрузить данные из CRM. Проверьте права вебхука или токена.`, Keyboards.backToMenu);
+      await ctx.reply(`❌ Не удалось получить данные из CRM. Проверьте права доступа.`, Keyboards.backToMenu);
       return;
     }
 
+    try {
+      await ctx.telegram.editMessageText(
+        chatId,
+        statusMsg.message_id,
+        undefined,
+        `⚡ *ИИ-Анализ текущего пульса продаж...*\n\n` +
+        `📊 Обработано сделок: *${metrics.summary.totalDeals}*\n` +
+        `🔍 Сверяю показатели с отраслевыми нормами...\n\n` +
+        `_Генерация экспресс-отчета..._`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (_) {}
+
     const auditResult = await performBusinessAudit(
       metrics,
-      session.niche || 'B2B/B2C продажи и услуги',
-      async () => {
-        try {
-          await ctx.telegram.editMessageText(
-            chatId,
-            statusMsg.message_id,
-            undefined,
-            `⏳ *ИИ-Агент проводит глубокий анализ воронки...*\n\n` +
-            `_Пожалуйста, подождите..._`,
-            { parse_mode: 'Markdown' }
-          );
-        } catch (_) {}
-      }
+      session.niche || 'B2B/B2C продажи и услуги'
     );
 
     let searchesNote = '';
@@ -101,7 +133,6 @@ export async function handleFullAudit(ctx: Context) {
 
     const fullReportText = auditResult.text + searchesNote;
 
-    // Пытаемся отредактировать статусное сообщение или отправляем новый отчет
     try {
       await ctx.telegram.editMessageText(
         chatId,
@@ -113,8 +144,7 @@ export async function handleFullAudit(ctx: Context) {
           ...Keyboards.afterAuditMenu,
         }
       );
-    } catch (editError) {
-      // Если редактирование не прошло (например, из-за специфических символов markdown), удаляем статус и отправляем чистым reply
+    } catch (_) {
       try {
         await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
       } catch (_) {}
@@ -124,7 +154,110 @@ export async function handleFullAudit(ctx: Context) {
       });
     }
   } catch (error: any) {
-    console.error('[Audit Handler Error]', error);
+    console.error('[Recent Audit Error]', error);
+    try {
+      await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
+    } catch (_) {}
+    await ctx.reply(`⚠️ Произошла ошибка: ${error.message}`, Keyboards.backToMenu);
+  }
+}
+
+/**
+ * РЕЖИМ 2: Полный потоковый аудит всей базы (Chunked Streaming)
+ */
+export async function handleFullStreamAudit(ctx: Context) {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+
+  const session = state.get(chatId);
+  if (!state.isConnected(chatId) && !session.metricsCache) {
+    await ctx.reply(`⚠️ Сначала подключите вашу CRM или запустите демо-режим:`, Keyboards.chooseCrm);
+    return;
+  }
+
+  const statusMsg = await ctx.reply(
+    `🚀 *Запуск потокового сбора всей базы CRM...*\n\n` +
+    `📦 Инициализация пагинации...\n\n` +
+    `_Пожалуйста, подождите..._`,
+    { parse_mode: 'Markdown' }
+  );
+
+  try {
+    const metrics = await fetchFullChunkedMetrics(
+      chatId,
+      async (loadedCount, totalCount, chunkIndex) => {
+        try {
+          const totalStr = totalCount ? ` из ~${totalCount}` : '';
+          await ctx.telegram.editMessageText(
+            chatId,
+            statusMsg.message_id,
+            undefined,
+            `📥 *Потоковая выгрузка базы CRM...*\n\n` +
+            `📦 Обработан чанк: *#${chunkIndex}*\n` +
+            `📊 Загружено сделок: *${loadedCount}${totalStr}*\n\n` +
+            `_Стриминг данных в аналитический модуль..._`,
+            { parse_mode: 'Markdown' }
+          );
+        } catch (_) {}
+      }
+    );
+
+    if (!metrics) {
+      try {
+        await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
+      } catch (_) {}
+      await ctx.reply(`❌ Не удалось выгрузить базу из CRM.`, Keyboards.backToMenu);
+      return;
+    }
+
+    try {
+      await ctx.telegram.editMessageText(
+        chatId,
+        statusMsg.message_id,
+        undefined,
+        `🧠 *ИИ-Агент проводит комплексный стратегический аудит...*\n\n` +
+        `📊 Полный объем базы: *${metrics.summary.totalDeals} сделок*\n` +
+        `🔍 Поиск отраслевых бенчмарков в сети...\n\n` +
+        `_Формирование глобального отчета и Quick Wins..._`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (_) {}
+
+    const auditResult = await performBusinessAudit(
+      metrics,
+      session.niche || 'B2B/B2C продажи и услуги'
+    );
+
+    let searchesNote = '';
+    if (auditResult.searches && auditResult.searches.length > 0) {
+      searchesNote = `\n\n🌐 *Использованные поисковые запросы по рынку:*\n` +
+        auditResult.searches.map(s => `• _${s}_`).join('\n');
+    }
+
+    const fullReportText = auditResult.text + searchesNote;
+
+    try {
+      await ctx.telegram.editMessageText(
+        chatId,
+        statusMsg.message_id,
+        undefined,
+        fullReportText,
+        {
+          parse_mode: 'Markdown',
+          ...Keyboards.afterAuditMenu,
+        }
+      );
+    } catch (_) {
+      try {
+        await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
+      } catch (_) {}
+      await ctx.reply(fullReportText, {
+        parse_mode: 'Markdown',
+        ...Keyboards.afterAuditMenu,
+      });
+    }
+  } catch (error: any) {
+    console.error('[Full Stream Audit Error]', error);
     try {
       await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
     } catch (_) {}
@@ -140,7 +273,7 @@ export async function handleDashboard(ctx: Context) {
   if (!chatId) return;
 
   const session = state.get(chatId);
-  const metrics = await getOrFetchMetrics(chatId);
+  const metrics = await fetchRecentMetrics(chatId);
 
   if (!metrics) {
     await ctx.reply(`⚠️ CRM не подключена:`, Keyboards.chooseCrm);
@@ -148,9 +281,10 @@ export async function handleDashboard(ctx: Context) {
   }
 
   const { summary } = metrics;
+  const isRecent = metrics.scope === 'recent';
 
   await ctx.reply(
-    `📊 *ЭКСПРЕСС-ДАШБОРД ВОРОНКИ ПРОДАЖ*\n\n` +
+    `📊 *ЭКСПРЕСС-ДАШБОРД ВОРОНКИ ПРОДАЖ (${isRecent ? 'ПОСЛЕДНИЕ 50 СДЕЛОК' : 'ВСЯ БАЗА'})*\n\n` +
     `🏢 Ниша: *${session.niche || 'Не указана'}*\n` +
     `🔗 CRM: *${metrics.crmType === 'bitrix24' ? 'Битрикс24' : 'amoCRM'}* (\`${metrics.portalOrDomain}\`)\n\n` +
     `📈 *Воронка сделок:*\n` +
@@ -179,7 +313,7 @@ export async function handleManagers(ctx: Context) {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
 
-  const metrics = await getOrFetchMetrics(chatId);
+  const metrics = await fetchRecentMetrics(chatId);
   if (!metrics) {
     await ctx.reply(`⚠️ CRM не подключена:`, Keyboards.chooseCrm);
     return;
@@ -230,7 +364,7 @@ export async function handleBenchmarks(ctx: Context) {
 
     const responseText = `🌐 *ОТРАСЛЕВЫЕ БЕНЧМАРКИ ИЗ СЕТИ (${niche})*\n\n` +
       `${snippetsText}\n\n` +
-      `💡 *Чтобы сравнить эти показатели с вашими цифрами, запустите «Полный ИИ-аудит бизнеса».*`;
+      `💡 *Чтобы сравнить эти показатели с вашими цифрами, запустите «Полный аудит всей базы».*`;
 
     try {
       await ctx.telegram.editMessageText(

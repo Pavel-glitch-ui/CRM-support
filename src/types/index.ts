@@ -56,6 +56,7 @@ export interface BusinessMetrics {
   crmType: CRMType;
   portalOrDomain: string;
   collectedAt: string;
+  scope?: 'recent' | 'full';
   summary: {
     totalDeals: number;
     wonDeals: number;

@@ -5,7 +5,11 @@ import { AmoRawData } from './amocrm';
 /**
  * Агрегация и расчет бизнес-метрик для Битрикс24
  */
-export function aggregateBitrixMetrics(raw: BitrixRawData, webhookUrl: string): BusinessMetrics {
+export function aggregateBitrixMetrics(
+  raw: BitrixRawData,
+  webhookUrl: string,
+  scope: 'recent' | 'full' = 'recent'
+): BusinessMetrics {
   const portalName = webhookUrl.replace(/^https?:\/\//, '').split('/')[0];
   const deals = raw.deals || [];
   const tasks = raw.tasks || [];
@@ -115,6 +119,7 @@ export function aggregateBitrixMetrics(raw: BitrixRawData, webhookUrl: string): 
     crmType: 'bitrix24',
     portalOrDomain: portalName,
     collectedAt: new Date().toISOString(),
+    scope,
     summary: {
       totalDeals,
       wonDeals,
@@ -158,7 +163,11 @@ export function aggregateBitrixMetrics(raw: BitrixRawData, webhookUrl: string): 
 /**
  * Агрегация и расчет бизнес-метрик для amoCRM
  */
-export function aggregateAmoMetrics(raw: AmoRawData, domain: string): BusinessMetrics {
+export function aggregateAmoMetrics(
+  raw: AmoRawData,
+  domain: string,
+  scope: 'recent' | 'full' = 'recent'
+): BusinessMetrics {
   const leads = raw.leads || [];
   const tasks = raw.tasks || [];
   const users = raw.users || [];
@@ -270,6 +279,7 @@ export function aggregateAmoMetrics(raw: AmoRawData, domain: string): BusinessMe
     crmType: 'amocrm',
     portalOrDomain: domain,
     collectedAt: new Date().toISOString(),
+    scope,
     summary: {
       totalDeals,
       wonDeals,

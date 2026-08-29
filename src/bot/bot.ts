@@ -2,7 +2,14 @@ import { Telegraf } from 'telegraf';
 import { config } from '../config';
 import { handleStart, handleHelp } from './handlers/start';
 import { handleConnectBitrix, handleConnectAmo, handleUseDemoData, handleSetNiche } from './handlers/connect';
-import { handleFullAudit, handleDashboard, handleManagers, handleBenchmarks, handleRefreshMetrics } from './handlers/audit';
+import {
+  handleRecentAudit,
+  handleFullStreamAudit,
+  handleDashboard,
+  handleManagers,
+  handleBenchmarks,
+  handleRefreshMetrics,
+} from './handlers/audit';
 import { handleTextMessage } from './handlers/chat';
 import { state } from '../state';
 import { Keyboards } from './keyboards';
@@ -38,7 +45,8 @@ export function createBot(): Telegraf {
   bot.action('use_demo_data', handleUseDemoData);
   bot.action('action_set_niche', handleSetNiche);
 
-  bot.action('action_full_audit', handleFullAudit);
+  bot.action('action_recent_audit', handleRecentAudit);
+  bot.action('action_full_stream_audit', handleFullStreamAudit);
   bot.action('action_dashboard', handleDashboard);
   bot.action('action_managers', handleManagers);
   bot.action('action_benchmarks', handleBenchmarks);

@@ -161,14 +161,20 @@ export async function performBusinessAudit(
   niche = 'Не указана',
   onModelSwitch?: (model: string, index: number) => void
 ): Promise<AIAgentResponse> {
-  const userPrompt = `Проведи детальный бизнес-аудит отдела продаж на основе следующих метрик из CRM:
+  const isRecent = metrics.scope === 'recent';
+  const scopeTitle = isRecent
+    ? 'ЭКСПРЕСС-АУДИТ ТЕКУЩЕГО ПУЛЬСА ПРОДАЖ (По выборке 50 последних измененных сделок)'
+    : 'ГЛОБАЛЬНЫЙ СТРАТЕГИЧЕСКИЙ АУДИТ ВСЕЙ БАЗЫ CRM (Полный срез)';
+
+  const userPrompt = `Проведи ${scopeTitle} на основе следующих метрик из CRM:
 
 СФЕРА БИЗНЕСА: ${niche}
+ТИП ВЫБОРКИ: ${isRecent ? '50 последних активных сделок (недавние изменения)' : 'Вся база CRM'}
 
 ДАННЫЕ ИЗ CRM:
 ${JSON.stringify(metrics, null, 2)}
 
-Пожалуйста, используй инструмент search_web для поиска бенчмарков в нише "${niche}" (если ниша указана), и выдай полный структурированный отчет для собственника бизнеса с конкретным планом действий на 7 дней.`;
+Пожалуйста, используй инструмент search_web для поиска бенчмарков в нише "${niche}" (если ниша указана), и выдай структурированный отчет для собственника бизнеса с конкретным планом действий на 7 дней.`;
 
   const aiResult = await runAgent({
     messages: [{ role: 'user', content: userPrompt }],
@@ -195,7 +201,7 @@ export async function askAIQuestion(
   niche = 'Не указана'
 ): Promise<AIAgentResponse> {
   const contextMessage = metrics
-    ? `Контекст метрик CRM пользователя (ниша: ${niche}):\n${JSON.stringify(metrics, null, 2)}`
+    ? `Контекст метрик CRM пользователя (ниша: ${niche}, режим: ${metrics.scope || 'recent'}):\n${JSON.stringify(metrics, null, 2)}`
     : `Контекст: CRM еще не подключена или метрики отсутствуют.`;
 
   const messages: any[] = [
@@ -221,7 +227,8 @@ export async function askAIQuestion(
  * Встроенный экспертный генератор отчета на случай недоступности OpenRouter
  */
 function generateAnalyticalReport(metrics: BusinessMetrics, niche: string): string {
-  const { summary, lostReasons, managers, tasks, pipelines } = metrics;
+  const { summary, lostReasons, managers, tasks } = metrics;
+  const isRecent = metrics.scope === 'recent';
   const winRate = summary.winRatePercent;
   const healthScore = winRate > 30 ? 8 : winRate > 15 ? 6 : 4;
 
@@ -234,20 +241,24 @@ function generateAnalyticalReport(metrics: BusinessMetrics, niche: string): stri
     `• *${m.name}*: Выручка ${m.totalRevenue.toLocaleString('ru-RU')} ₽ (Сделок: ${m.dealsCount}, Win Rate: ${m.winRatePercent}%, Просрочек: ${m.overdueTasksCount})`
   ).join('\n') || '• Данные по сотрудникам отсутствуют';
 
-  return `🩺 *1. HEALTH CHECK ОТДЕЛА ПРОДАЖ*
+  const headerTitle = isRecent
+    ? `⚡ *1. HEALTH CHECK: ТЕКУЩИЙ ПУЛЬС ПРОДАЖ (ПОСЛЕДНИЕ 50 СДЕЛОК)*`
+    : `🩺 *1. СТРАТЕГИЧЕСКИЙ HEALTH CHECK ВСЕЙ БАЗЫ CRM*`;
+
+  return `${headerTitle}
 Оценка эффективности: *${healthScore} из 10*
 Ниша: *${niche}*
-CRM: *${metrics.crmType === 'bitrix24' ? 'Битрикс24' : 'amoCRM'}*
+CRM: *${metrics.crmType === 'bitrix24' ? 'Битрикс24' : 'amoCRM'}* (${isRecent ? 'Выборка последних изменений' : 'Полная база'})
 
 📊 *2. РАЗБОР ВОРОНКИ И КОНВЕРСИЙ*
-• Всего сделок в базе: *${summary.totalDeals}*
+• Сделок в анализе: *${summary.totalDeals}*
 • Успешно закрыто: *${summary.wonDeals}* (${summary.winRatePercent}%)
 • Проиграно: *${summary.lostDeals}* (${(100 - summary.winRatePercent).toFixed(1)}%)
 • В работе прямо сейчас: *${summary.inProgressDeals}*
 
 💰 *3. ФИНАНСОВЫЙ ДАШБОРД*
-• Фактическая выручка: *${summary.totalRevenue.toLocaleString('ru-RU')} ₽*
-• Объем денег в воронке (пайплайн): *${summary.pipelineValue.toLocaleString('ru-RU')} ₽*
+• Выручка: *${summary.totalRevenue.toLocaleString('ru-RU')} ₽*
+• Объем в воронке (пайплайн): *${summary.pipelineValue.toLocaleString('ru-RU')} ₽*
 • Средний чек: *${summary.averageCheck.toLocaleString('ru-RU')} ₽*
 
 ⚠️ *4. УЗКИЕ МЕСТА И КРИТИЧЕСКИЕ ПОТЕРИ*
