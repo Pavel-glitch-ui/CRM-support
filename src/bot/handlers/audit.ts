@@ -116,15 +116,27 @@ export async function handleRecentAudit(ctx: Context) {
         undefined,
         `⚡ *ИИ-Анализ текущего пульса продаж...*\n\n` +
         `📊 Обработано сделок: *${metrics.summary.totalDeals}*\n` +
-        `🔍 Сверяю показатели с отраслевыми нормами...\n\n` +
-        `_Генерация экспресс-отчета..._`,
+        `🔍 Сверяю показатели с отраслевыми нормами рынка...\n\n` +
+        `_🧠 Нейросеть генерирует аудит и верстает PDF... Пожалуйста, подождите ~10–20 секунд, ваш отчет уже в пути!_`,
         { parse_mode: 'Markdown' }
       );
     } catch (_) { }
 
     const auditResult = await performBusinessAudit(
       metrics,
-      session.niche || 'B2B/B2C продажи и услуги'
+      session.niche || 'B2B/B2C продажи и услуги',
+      async () => {
+        try {
+          await ctx.telegram.editMessageText(
+            chatId,
+            statusMsg.message_id,
+            undefined,
+            `⚡ *ИИ-Агент формирует углубленный аудит...*\n\n` +
+            `_Подготовка расчетов и верстка PDF..._`,
+            { parse_mode: 'Markdown' }
+          );
+        } catch (_) { }
+      }
     );
 
     let searchesNote = '';
@@ -134,6 +146,17 @@ export async function handleRecentAudit(ctx: Context) {
     }
 
     const fullReportText = auditResult.text + searchesNote;
+
+    try {
+      await ctx.telegram.editMessageText(
+        chatId,
+        statusMsg.message_id,
+        undefined,
+        `📄 *Верстка официального PDF-отчета...*\n\n` +
+        `_Почти готово! Прикрепляю документ и резюме..._`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (_) { }
 
     // Очищаем статусное сообщение прогресса
     try {
@@ -227,15 +250,27 @@ export async function handleFullStreamAudit(ctx: Context) {
         undefined,
         `🧠 *ИИ-Агент проводит комплексный стратегический аудит...*\n\n` +
         `📊 Полный объем базы: *${metrics.summary.totalDeals} сделок*\n` +
-        `🔍 Поиск отраслевых бенчмарков в сети...\n\n` +
-        `_Формирование глобального отчета и Quick Wins..._`,
+        `🔍 Сверяю воронку с рыночными отраслевыми нормами...\n\n` +
+        `_🧠 Генерация аналитики и верстка PDF-отчета... Пожалуйста, подождите ~15–25 секунд, ваш отчет уже в пути!_`,
         { parse_mode: 'Markdown' }
       );
     } catch (_) { }
 
     const auditResult = await performBusinessAudit(
       metrics,
-      session.niche || 'B2B/B2C продажи и услуги'
+      session.niche || 'B2B/B2C продажи и услуги',
+      async () => {
+        try {
+          await ctx.telegram.editMessageText(
+            chatId,
+            statusMsg.message_id,
+            undefined,
+            `🧠 *ИИ-Анализ всей базы CRM...*\n\n` +
+            `_Глубокий разбор воронки и верстка PDF-отчета..._`,
+            { parse_mode: 'Markdown' }
+          );
+        } catch (_) { }
+      }
     );
 
     let searchesNote = '';
@@ -245,6 +280,17 @@ export async function handleFullStreamAudit(ctx: Context) {
     }
 
     const fullReportText = auditResult.text + searchesNote;
+
+    try {
+      await ctx.telegram.editMessageText(
+        chatId,
+        statusMsg.message_id,
+        undefined,
+        `📄 *Верстка официального PDF-отчета всей базы...*\n\n` +
+        `_Почти готово! Прикрепляю документ и резюме..._`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (_) { }
 
     // Очищаем статусное сообщение прогресса
     try {
