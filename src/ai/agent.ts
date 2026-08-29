@@ -225,6 +225,70 @@ ${benchmarksContext}
 }
 
 /**
+ * Генерация краткого Executive Summary для Telegram (до 1000 символов)
+ */
+export async function generateExecutiveSummary(
+  fullReportText: string,
+  metrics: BusinessMetrics,
+  niche: string = 'Не указана'
+): Promise<string> {
+  const summaryPrompt = `На основе подготовленного аудита CRM составь краткое, емкое Executive Summary для собственника бизнеса (до 1000 символов) для сообщения в Telegram.
+
+СФЕРА: ${niche}
+ВЫРУЧКА: ${metrics.summary.totalRevenue.toLocaleString('ru-RU')} ₽ | КОНВЕРСИЯ: ${metrics.summary.winRatePercent}% | ЗАВИСЛО: ${metrics.summary.stuckDealsCount} сделок
+
+ПОЛНЫЙ ТЕКСТ АУДИТА:
+${fullReportText.slice(0, 3000)}
+
+СТРУКТУРА СООБЩЕНИЯ:
+🩺 *1. Оценка Health Check:* (балл из 10 и краткий вердикт)
+📊 *2. Ключевые цифры воронки:* (выручка, Win Rate, пайплайн)
+⚠️ *3. Главная точка слива денег:* (почему теряются клиенты)
+🚀 *4. Топ-1 действие на эту неделю:* (главный Quick Win)
+📄 *5. Уведомление:* "Подробный разбор воронки, финансовые расчеты, рейтинг менеджеров и 7-дневный план сформированы в прикрепленном PDF-документе ниже."
+
+Без лишних вводных слов, сразу по структуре!`;
+
+  try {
+    const aiResult = await runAgent({
+      messages: [{ role: 'user', content: summaryPrompt }],
+      systemPrompt: 'Ты — бизнес-консультант. Пиши краткие, плотные и структурированные Executive Summary для Telegram без лишней воды.',
+    });
+
+    if (aiResult.text && aiResult.text.length > 100 && !aiResult.isFallbackGenerated) {
+      return aiResult.text;
+    }
+  } catch (err: any) {
+    console.warn('[Executive Summary] Сбой LLM суммаризации, используем детерминированное резюме:', err.message);
+  }
+
+  return generateLocalExecutiveSummary(metrics, niche);
+}
+
+/**
+ * Локальное детерминированное Executive Summary
+ */
+function generateLocalExecutiveSummary(metrics: BusinessMetrics, niche: string): string {
+  const { summary, tasks } = metrics;
+  const winRate = summary.winRatePercent;
+  const score = winRate > 30 ? '8.5 из 10' : winRate > 15 ? '6.5 из 10' : '4.0 из 10';
+
+  return `📋 *EXECUTIVE SUMMARY: АУДИТ ОТДЕЛА ПРОДАЖ*\n\n` +
+    `🏢 Ниша: *${niche}* | CRM: *${metrics.crmType === 'bitrix24' ? 'Битрикс24' : 'amoCRM'}*\n` +
+    `🩺 *Оценка эффективности воронки:* *${score}*\n\n` +
+    `📊 *Ключевой финансовый срез:*\n` +
+    `• Фактическая выручка: *${summary.totalRevenue.toLocaleString('ru-RU')} ₽*\n` +
+    `• Конверсия (Win Rate): *${summary.winRatePercent}%* (Закрыто: ${summary.wonDeals} из ${summary.totalDeals})\n` +
+    `• Деньги в работе (пайплайн): *${summary.pipelineValue.toLocaleString('ru-RU')} ₽*\n\n` +
+    `⚠️ *Главные точки риска:*\n` +
+    `• Зависшие сделки (>14 дней без движения): *${summary.stuckDealsCount} шт.*\n` +
+    `• Просроченные задачи команды: *${tasks.overdue} из ${tasks.total}* (*${tasks.overduePercent}%*)\n\n` +
+    `🚀 *Ключевой фокус на 7 дней:*\n` +
+    `Срочно провести ревизию ${summary.stuckDealsCount} зависших сделок и внедрить ежедневный 15-минутный контроль просрочек.\n\n` +
+    `📄 _Подробный разбор каждого этапа, финансовая аналитика, рейтинг менеджеров и 7-дневный план действий сформированы в прикрепленном PDF-отчете ниже!_`;
+}
+
+/**
  * Консультация / чат с ИИ
  */
 export async function askAIQuestion(

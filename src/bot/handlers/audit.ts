@@ -4,7 +4,7 @@ import { Keyboards } from '../keyboards';
 import { Bitrix24Client } from '../../crm/bitrix24';
 import { AmoCrmClient } from '../../crm/amocrm';
 import { aggregateBitrixMetrics, aggregateAmoMetrics } from '../../crm/aggregator';
-import { performBusinessAudit } from '../../ai/agent';
+import { performBusinessAudit, generateExecutiveSummary } from '../../ai/agent';
 import { searchWeb } from '../../ai/tools/search';
 import { BusinessMetrics } from '../../types';
 import { sendSafeText, sendAuditTxtFile, sendAuditPdfFile } from '../../utils/telegram';
@@ -152,21 +152,28 @@ export async function handleRecentAudit(ctx: Context) {
         chatId,
         statusMsg.message_id,
         undefined,
-        `📄 *Верстка официального PDF-отчета...*\n\n` +
+        `📄 *Верстка официального PDF-отчета и подготовка резюме...*\n\n` +
         `_Почти готово! Прикрепляю документ и резюме..._`,
         { parse_mode: 'Markdown' }
       );
     } catch (_) { }
+
+    // 1. Генерируем краткое Executive Summary для чата
+    const executiveSummary = await generateExecutiveSummary(
+      fullReportText,
+      metrics,
+      session.niche || 'Не указана'
+    );
 
     // Очищаем статусное сообщение прогресса
     try {
       await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
     } catch (_) { }
 
-    // 1. Отправляем текстовое резюме аудита в чат
-    await sendSafeText(ctx, fullReportText);
+    // 2. Отправляем лаконичное Executive Summary в чат
+    await sendSafeText(ctx, executiveSummary);
 
-    // 2. Генерируем и прикрепляем брендированный PDF-документ
+    // 3. Генерируем и прикрепляем полный брендированный PDF-документ
     try {
       const pdfBuffer = await generateAuditPdf(metrics, fullReportText, session.niche);
       await sendAuditPdfFile(
@@ -286,21 +293,28 @@ export async function handleFullStreamAudit(ctx: Context) {
         chatId,
         statusMsg.message_id,
         undefined,
-        `📄 *Верстка официального PDF-отчета всей базы...*\n\n` +
+        `📄 *Верстка официального PDF-отчета всей базы и подготовка резюме...*\n\n` +
         `_Почти готово! Прикрепляю документ и резюме..._`,
         { parse_mode: 'Markdown' }
       );
     } catch (_) { }
+
+    // 1. Генерируем краткое Executive Summary для чата
+    const executiveSummary = await generateExecutiveSummary(
+      fullReportText,
+      metrics,
+      session.niche || 'Не указана'
+    );
 
     // Очищаем статусное сообщение прогресса
     try {
       await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
     } catch (_) { }
 
-    // 1. Отправляем текстовый отчет
-    await sendSafeText(ctx, fullReportText);
+    // 2. Отправляем лаконичное Executive Summary в чат
+    await sendSafeText(ctx, executiveSummary);
 
-    // 2. Генерируем и прикрепляем брендированный PDF-документ всей базы
+    // 3. Генерируем и прикрепляем брендированный PDF-документ всей базы
     try {
       const pdfBuffer = await generateAuditPdf(metrics, fullReportText, session.niche);
       await sendAuditPdfFile(

@@ -104,9 +104,9 @@ export async function generateAuditPdf(
       doc.fillColor(scoreColor).font(fontBold).fontSize(18).text(score, 55, startY + 28);
 
       // 3 Колонки метрик
-      const col1 = 180;
-      const col2 = 300;
-      const col3 = 420;
+      const col1 = 260;
+      const col2 = 310;
+      const col3 = 480;
 
       doc.fillColor(darkColor).font(fontRegular).fontSize(9).text('Выручка факт:', col1, startY + 15);
       doc.fillColor(greenColor).font(fontBold).fontSize(11).text(`${metrics.summary.totalRevenue.toLocaleString('ru-RU')} ₽`, col1, startY + 28);
