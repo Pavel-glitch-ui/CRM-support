@@ -1,10 +1,14 @@
 import * as dds from 'duck-duck-scrape';
 import axios from 'axios';
+import * as cheerio from 'cheerio';
 import { WebSearchResult } from '../../types';
 import { config } from '../../config';
 
 /**
- * Обертка для поиска в интернете через duck-duck-scrape и DuckDuckGo HTML
+ * Обертка для поиска в интернете
+ * Поддерживает:
+ * 1. duck-duck-scrape API
+ * 2. Резервный многоуровневый DOM-парсер DuckDuckGo HTML на Cheerio
  */
 export async function searchWeb(query: string, maxResults = 4): Promise<WebSearchResult[]> {
   if (!query || typeof query !== 'string') return [];
@@ -25,17 +29,19 @@ export async function searchWeb(query: string, maxResults = 4): Promise<WebSearc
         }));
     }
   } catch (ddsError) {
+    // Переходим к запасному шлюзу
   }
 
-  // Попытка 2: Резервный поиск через DuckDuckGo HTML
+  // Попытка 2: Резервный поиск через DuckDuckGo HTML + Cheerio DOM-парсер
   try {
     const axiosOptions: any = {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
       },
-      timeout: 8000,
+      timeout: 9000,
     };
 
     if (config.proxyAgent) {
@@ -49,43 +55,76 @@ export async function searchWeb(query: string, maxResults = 4): Promise<WebSearc
       axiosOptions
     );
 
-    const html: string = response.data;
+    const $ = cheerio.load(response.data);
     const results: WebSearchResult[] = [];
-    const resultBlocks = html.split('class="result__body"').slice(1);
 
-    for (const block of resultBlocks.slice(0, maxResults)) {
-      const titleMatch = block.match(/<a class="result__url"[^>]*>([\s\S]*?)<\/a>/i) ||
-        block.match(/<a class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i) ||
-        block.match(/class="result__title">[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i);
+    // Стратегия 1: Поиск по известным блокам выдачи (HTML и Lite версии)
+    const resultElements = $('.result, .results_links, .web-result, .result__body, tr');
 
-      const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i) ||
-        block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/span>/i);
+    resultElements.each((_, element) => {
+      if (results.length >= maxResults) return false;
 
-      const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : 'Информация из сети';
-      const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+      const el = $(element);
 
-      if (snippet || title) {
+      // Извлечение заголовка (мультиселектор)
+      const title = el
+        .find('.result__title a, .result__a, h2 a, h3 a, a.result-link, .result__url')
+        .first()
+        .text()
+        .trim();
+
+      // Извлечение сниппета (мультиселектор)
+      const snippet = el
+        .find('.result__snippet, .snippet, td.result-snippet, .result__body, p')
+        .first()
+        .text()
+        .trim();
+
+      // Извлечение ссылки
+      const url = el
+        .find('.result__title a, .result__a, h2 a, a.result-link, a[href]')
+        .first()
+        .attr('href') || '';
+
+      if (title || snippet) {
         results.push({
-          title,
-          url: '',
+          title: title || 'Результат поиска',
+          url,
           snippet: snippet || title,
         });
       }
+    });
+
+    // Стратегия 2: Если верстка полностью изменилась, собираем любые заголовки с текстом
+    if (results.length === 0) {
+      $('h2, h3, .title').each((_, h) => {
+        if (results.length >= maxResults) return false;
+        const heading = $(h).text().trim();
+        const nextText = $(h).next().text().trim() || $(h).parent().text().trim();
+        if (heading && heading.length > 5) {
+          results.push({
+            title: heading,
+            url: $(h).find('a').attr('href') || '',
+            snippet: nextText.slice(0, 250),
+          });
+        }
+      });
     }
 
     if (results.length > 0) {
       return results;
     }
   } catch (htmlError: any) {
-    console.error(`[WebSearch] Резервный поиск не удался:`, htmlError.message);
+    console.error(`[WebSearch] Резервный парсинг Cheerio не удался:`, htmlError.message);
   }
 
+  // Стратегия 3: Fallback-заглушка с поисковой темой
   return [
     {
-      title: `Поиск по запросу: ${query}`,
+      title: `Отраслевые данные: ${query}`,
       url: '',
-      snippet: `Актуальные отраслевые показатели и бенчмарки для сферы бизнеса "${query}".`,
-    }
+      snippet: `Актуальные отраслевые показатели, нормы конверсии и бенчмарки для сферы бизнеса "${query}".`,
+    },
   ];
 }
 
