@@ -201,9 +201,10 @@ export async function generateAuditPdf(
       for (let i = 0; i < totalPages; i++) {
         doc.switchToPage(i);
         doc.fillColor('#94a3b8').font(fontRegular).fontSize(8)
-          .text(`Сгенерировано AI CRM Analyst  |  Страница ${i + 1} из ${totalPages}`, 40, 800, {
+          .text(`Сгенерировано AI CRM Analyst  |  Страница ${i + 1} из ${totalPages}`, 40, 775, {
             align: 'center',
             width: 515,
+            lineBreak: false,
           });
       }
 
