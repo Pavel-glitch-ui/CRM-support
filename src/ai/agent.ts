@@ -64,7 +64,7 @@ export async function runAgent({
       const response = await openai.chat.completions.create({
         model: currentModel,
         messages: conversation,
-        temperature: 0.5,
+        temperature: 0.4,
       });
 
       const choice = response.choices && response.choices[0];
@@ -75,7 +75,14 @@ export async function runAgent({
       const content = choice.message.content || '';
       const cleanText = sanitizeAssistantResponse(content);
 
-      if (cleanText && cleanText.length > 50) {
+      // Проверяем, что ответ не является короткой отпиской-заглушкой
+      const isIntroStub = cleanText.length < 250 && (
+        cleanText.toLowerCase().includes('проведу анализ') ||
+        cleanText.toLowerCase().includes('найду') ||
+        cleanText.toLowerCase().includes('сначала')
+      );
+
+      if (cleanText && cleanText.length >= 100 && !isIntroStub) {
         return {
           text: cleanText,
           modelUsed: currentModel,
@@ -83,7 +90,7 @@ export async function runAgent({
         };
       }
 
-      throw new Error('Модель вернула слишком короткий или пустой ответ');
+      throw new Error('Модель вернула вводную заглушку или слишком короткий текст');
     } catch (error: any) {
       console.error(`[AI Agent] Ошибка с моделью ${currentModel}:`, error.message);
       lastError = error;
@@ -146,7 +153,7 @@ ${JSON.stringify(metrics, null, 2)}
 🌐 АКТУАЛЬНЫЕ РЫНОЧНЫЕ БЕНЧМАРКИ ПО НИШЕ "${niche}":
 ${benchmarksContext}
 
-Пожалуйста, сопоставь фактические показатели компании с рыночными бенчмарками и составь подробный структурированный отчет для собственника бизнеса с конкретным планом действий (Quick Wins) на 7 дней.`;
+ИНСТРУКЦИЯ: Начни свой ответ сразу с «🩺 1. ОБЩИЙ HEALTH CHECK ОТДЕЛА ПРОДАЖ» и выдай полный детальный аудит по всем 6 разделам с конкретными расчетами и выводами. Без вводных фраз!`;
 
   const aiResult = await runAgent({
     messages: [{ role: 'user', content: userPrompt }],
