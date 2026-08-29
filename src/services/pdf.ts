@@ -38,6 +38,7 @@ export async function generateAuditPdf(
       const doc = new PDFDocument({
         size: 'A4',
         margin: 40,
+        bufferPages: true,
         info: {
           Title: `Аудит отдела продаж CRM — ${metrics.portalOrDomain}`,
           Author: 'AI Business Analyst Bot',
