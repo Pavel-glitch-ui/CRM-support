@@ -7,6 +7,7 @@ import { aggregateBitrixMetrics, aggregateAmoMetrics } from '../../crm/aggregato
 import { performBusinessAudit } from '../../ai/agent';
 import { searchWeb } from '../../ai/tools/search';
 import { BusinessMetrics } from '../../types';
+import { sendSafeText, sendAuditTxtFile } from '../../utils/telegram';
 
 /**
  * 1. Получение экспресс-метрик по 50 последним измененным сделкам
@@ -102,7 +103,7 @@ export async function handleRecentAudit(ctx: Context) {
     if (!metrics) {
       try {
         await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
-      } catch (_) {}
+      } catch (_) { }
       await ctx.reply(`❌ Не удалось получить данные из CRM. Проверьте права доступа.`, Keyboards.backToMenu);
       return;
     }
@@ -118,7 +119,7 @@ export async function handleRecentAudit(ctx: Context) {
         `_Генерация экспресс-отчета..._`,
         { parse_mode: 'Markdown' }
       );
-    } catch (_) {}
+    } catch (_) { }
 
     const auditResult = await performBusinessAudit(
       metrics,
@@ -133,31 +134,27 @@ export async function handleRecentAudit(ctx: Context) {
 
     const fullReportText = auditResult.text + searchesNote;
 
+    // Очищаем статусное сообщение прогресса
     try {
-      await ctx.telegram.editMessageText(
-        chatId,
-        statusMsg.message_id,
-        undefined,
-        fullReportText,
-        {
-          parse_mode: 'Markdown',
-          ...Keyboards.afterAuditMenu,
-        }
-      );
-    } catch (_) {
-      try {
-        await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
-      } catch (_) {}
-      await ctx.reply(fullReportText, {
-        parse_mode: 'Markdown',
-        ...Keyboards.afterAuditMenu,
-      });
-    }
+      await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
+    } catch (_) { }
+
+    // Отправляем текстовый отчет (с авто-разбиением, если превышает лимит)
+    await sendSafeText(ctx, fullReportText);
+
+    // Прикрепляем файл полного отчета .txt для удобства сохранения/пересылки
+    await sendAuditTxtFile(
+      ctx,
+      fullReportText,
+      `CRM_Recent_Audit_${metrics.portalOrDomain || 'Report'}`,
+      `📋 *Полный экспресс-аудит (последние 50 сделок) прикреплен в файле выше.*\n\n_Задайте вопрос ИИ по отчету через кнопку ниже:_`,
+      Keyboards.afterAuditMenu
+    );
   } catch (error: any) {
     console.error('[Recent Audit Error]', error);
     try {
       await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
-    } catch (_) {}
+    } catch (_) { }
     await ctx.reply(`⚠️ Произошла ошибка: ${error.message}`, Keyboards.backToMenu);
   }
 }
@@ -198,14 +195,14 @@ export async function handleFullStreamAudit(ctx: Context) {
             `_Стриминг данных в аналитический модуль..._`,
             { parse_mode: 'Markdown' }
           );
-        } catch (_) {}
+        } catch (_) { }
       }
     );
 
     if (!metrics) {
       try {
         await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
-      } catch (_) {}
+      } catch (_) { }
       await ctx.reply(`❌ Не удалось выгрузить базу из CRM.`, Keyboards.backToMenu);
       return;
     }
@@ -221,7 +218,7 @@ export async function handleFullStreamAudit(ctx: Context) {
         `_Формирование глобального отчета и Quick Wins..._`,
         { parse_mode: 'Markdown' }
       );
-    } catch (_) {}
+    } catch (_) { }
 
     const auditResult = await performBusinessAudit(
       metrics,
@@ -236,31 +233,26 @@ export async function handleFullStreamAudit(ctx: Context) {
 
     const fullReportText = auditResult.text + searchesNote;
 
+    // Очищаем статусное сообщение прогресса
     try {
-      await ctx.telegram.editMessageText(
-        chatId,
-        statusMsg.message_id,
-        undefined,
-        fullReportText,
-        {
-          parse_mode: 'Markdown',
-          ...Keyboards.afterAuditMenu,
-        }
-      );
-    } catch (_) {
-      try {
-        await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
-      } catch (_) {}
-      await ctx.reply(fullReportText, {
-        parse_mode: 'Markdown',
-        ...Keyboards.afterAuditMenu,
-      });
-    }
+      await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
+    } catch (_) { }
+
+    // Отправляем текстовый отчет (с авто-разбиением при превышении лимита)
+    await sendSafeText(ctx, fullReportText);
+
+    await sendAuditTxtFile(
+      ctx,
+      fullReportText,
+      `CRM_Full_Strategic_Audit_${metrics.portalOrDomain || 'Report'}`,
+      `📋 *Полный стратегический аудит всей базы прикреплен в файле выше.*\n\n_Задайте вопрос ИИ по отчету через кнопку ниже:_`,
+      Keyboards.afterAuditMenu
+    );
   } catch (error: any) {
     console.error('[Full Stream Audit Error]', error);
     try {
       await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
-    } catch (_) {}
+    } catch (_) { }
     await ctx.reply(`⚠️ Произошла ошибка при анализе: ${error.message}`, Keyboards.backToMenu);
   }
 }
@@ -387,7 +379,7 @@ export async function handleBenchmarks(ctx: Context) {
   } catch (error: any) {
     try {
       await ctx.telegram.deleteMessage(chatId, searchingMsg.message_id);
-    } catch (_) {}
+    } catch (_) { }
     await ctx.reply(`⚠️ Ошибка поиска: ${error.message}`, Keyboards.mainMenu(true));
   }
 }

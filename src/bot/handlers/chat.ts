@@ -4,6 +4,7 @@ import { Keyboards } from '../keyboards';
 import { Bitrix24Client } from '../../crm/bitrix24';
 import { AmoCrmClient } from '../../crm/amocrm';
 import { askAIQuestion } from '../../ai/agent';
+import { sendSafeText } from '../../utils/telegram';
 
 export async function handleTextMessage(ctx: Context) {
   const chatId = ctx.chat?.id;
@@ -31,7 +32,7 @@ export async function handleTextMessage(ctx: Context) {
 
     try {
       await ctx.telegram.deleteMessage(chatId, checkingMsg.message_id);
-    } catch (_) {}
+    } catch (_) { }
 
     if (isValid) {
       state.setCrm(chatId, 'bitrix24', { webhookUrl: text });
@@ -72,7 +73,7 @@ export async function handleTextMessage(ctx: Context) {
 
     try {
       await ctx.telegram.deleteMessage(chatId, checkingMsg.message_id);
-    } catch (_) {}
+    } catch (_) { }
 
     if (isValid) {
       state.setCrm(chatId, 'amocrm', { domain, token });
@@ -125,33 +126,18 @@ export async function handleTextMessage(ctx: Context) {
     const fullAnswerText = response.text;
 
     try {
-      await ctx.telegram.editMessageText(
-        chatId,
-        typingMsg.message_id,
-        undefined,
-        fullAnswerText,
-        {
-          parse_mode: 'Markdown',
-          ...Keyboards.mainMenu(Boolean(session.metricsCache)),
-        }
-      );
-    } catch (_) {
-      try {
-        await ctx.telegram.deleteMessage(chatId, typingMsg.message_id);
-      } catch (_) {}
-      await ctx.reply(
-        fullAnswerText,
-        {
-          parse_mode: 'Markdown',
-          ...Keyboards.mainMenu(Boolean(session.metricsCache)),
-        }
-      );
-    }
+      await ctx.telegram.deleteMessage(chatId, typingMsg.message_id);
+    } catch (_) { }
+
+    await sendSafeText(ctx, fullAnswerText, {
+      parse_mode: 'Markdown',
+      ...Keyboards.mainMenu(Boolean(session.metricsCache)),
+    });
   } catch (error: any) {
     console.error('[Chat AI Error]', error);
     try {
       await ctx.telegram.deleteMessage(chatId, typingMsg.message_id);
-    } catch (_) {}
+    } catch (_) { }
     await ctx.reply(`⚠️ Ошибка обработки вопроса: ${error.message}`, Keyboards.mainMenu(true));
   }
 }
