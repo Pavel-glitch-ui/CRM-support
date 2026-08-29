@@ -1,6 +1,6 @@
 import { OpenAI } from 'openai';
 import { config } from '../config';
-import { searchWeb, searchToolDefinition } from './tools/search';
+import { searchWeb } from './tools/search';
 import { SYSTEM_PROMPT_ANALYST, SYSTEM_PROMPT_CHAT } from './prompts';
 import { BusinessMetrics, AIAgentResponse } from '../types';
 
@@ -21,68 +21,6 @@ if (config.proxyAgent) {
 const openai = new OpenAI(openaiOptions);
 
 /**
- * Извлечение вызовов инструментов из текстового контента (псевдо-XML, JSON-теги)
- */
-function extractToolCallsFromText(content: string): Array<{ name: string; query: string }> {
-  if (!content) return [];
-  const results: Array<{ name: string; query: string }> = [];
-
-  // 1. Паттерн Nemotron / Laguna: <toolcall><function=searchweb><parameter=query>...</parameter></function></toolcall>
-  const xmlPattern = /<toolcall>[\s\S]*?<function=([^>]+)>[\s\S]*?<parameter=query>([\s\S]*?)<\/parameter>[\s\S]*?<\/toolcall>/gi;
-  let match;
-  while ((match = xmlPattern.exec(content)) !== null) {
-    const fnName = match[1].trim();
-    const query = match[2].trim();
-    if (query) {
-      results.push({ name: fnName, query });
-    }
-  }
-
-  // 2. Паттерн Hermes / Qwen: <tool_call>{"name":"search_web","arguments":{"query":"..."}}</tool_call>
-  const toolCallTagPattern = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
-  while ((match = toolCallTagPattern.exec(content)) !== null) {
-    try {
-      const parsed = JSON.parse(match[1].trim());
-      const fnName = parsed.name || parsed.function || 'search_web';
-      let query = '';
-      if (typeof parsed.arguments === 'object') {
-        query = parsed.arguments.query || parsed.arguments.q || '';
-      } else if (typeof parsed.arguments === 'string') {
-        try {
-          const argObj = JSON.parse(parsed.arguments);
-          query = argObj.query || argObj.q || parsed.arguments;
-        } catch (_) {
-          query = parsed.arguments;
-        }
-      } else if (parsed.query) {
-        query = parsed.query;
-      }
-      if (query) {
-        results.push({ name: fnName, query: query.trim() });
-      }
-    } catch (_) {}
-  }
-
-  // 3. Паттерн [TOOL_CALLS] [...]
-  const toolCallsBracketPattern = /\[TOOL_CALLS\]\s*(\[\s*\{[\s\S]*?\}\s*\]|\{[\s\S]*?\})/gi;
-  while ((match = toolCallsBracketPattern.exec(content)) !== null) {
-    try {
-      const parsed = JSON.parse(match[1].trim());
-      const items = Array.isArray(parsed) ? parsed : [parsed];
-      for (const item of items) {
-        const fnName = item.name || item.function || 'search_web';
-        const query = item.arguments?.query || item.query || '';
-        if (query) {
-          results.push({ name: fnName, query: String(query).trim() });
-        }
-      }
-    } catch (_) {}
-  }
-
-  return results;
-}
-
-/**
  * Очистка итогового текста от остаточных служебных тегов
  */
 function sanitizeAssistantResponse(text: string | null | undefined): string {
@@ -95,22 +33,19 @@ function sanitizeAssistantResponse(text: string | null | undefined): string {
 }
 
 /**
- * Запуск ИИ-агента с каскадным перебором моделей
+ * Запуск ИИ-агента с каскадным перебором моделей (Pre-Search Prompt-Driven Engine)
  */
 export async function runAgent({
   messages,
   systemPrompt = SYSTEM_PROMPT_ANALYST,
-  enableSearch = true,
   onModelSwitch,
 }: {
-  messages: Array<{ role: 'user' | 'assistant' | 'system' | 'tool'; content: string; name?: string; tool_call_id?: string }>;
+  messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
   systemPrompt?: string;
-  enableSearch?: boolean;
   onModelSwitch?: (model: string, index: number) => void;
 }): Promise<AIAgentResponse> {
   const models = config.models;
   let lastError: any = null;
-  const performedSearches: string[] = [];
 
   const conversation: any[] = [
     { role: 'system', content: systemPrompt },
@@ -119,148 +54,36 @@ export async function runAgent({
 
   for (let i = 0; i < models.length; i++) {
     const currentModel = models[i];
-    console.log(`[AI Agent] Пробуем модель [${i + 1}/${models.length}]: ${currentModel}`);
+    console.log(`[AI Agent] Запрос к модели [${i + 1}/${models.length}]: ${currentModel}`);
 
     if (onModelSwitch && i > 0) {
       onModelSwitch(currentModel, i);
     }
 
     try {
-      const callParams: any = {
+      const response = await openai.chat.completions.create({
         model: currentModel,
         messages: conversation,
-        temperature: 0.6,
-      };
-
-      if (enableSearch) {
-        callParams.tools = [searchToolDefinition];
-        callParams.tool_choice = 'auto';
-      }
-
-      let response: any;
-      try {
-        response = await openai.chat.completions.create(callParams);
-      } catch (toolError: any) {
-        if (
-          toolError.message &&
-          (toolError.message.includes('tool') || toolError.message.includes('function') || toolError.status === 400)
-        ) {
-          console.warn(`[AI Agent] Модель ${currentModel} не поддерживает Tools API, переключаемся на стандартный запрос...`);
-          const { tools, tool_choice, ...newParams } = callParams;
-          response = await openai.chat.completions.create(newParams);
-        } else {
-          throw toolError;
-        }
-      }
+        temperature: 0.5,
+      });
 
       const choice = response.choices && response.choices[0];
       if (!choice || !choice.message) {
         throw new Error('Пустой ответ от модели');
       }
 
-      const responseMessage = choice.message;
-      const content = responseMessage.content || '';
-
-      // 1. Проверка нативного формата OpenAI tool_calls
-      if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
-        console.log(`[AI Agent] Нативный Tool Call обнаружен (${responseMessage.tool_calls.length})`);
-        conversation.push(responseMessage);
-
-        for (const toolCall of responseMessage.tool_calls) {
-          if (toolCall.function && toolCall.function.name === 'search_web') {
-            let query = '';
-            try {
-              const args = JSON.parse(toolCall.function.arguments || '{}');
-              query = args.query;
-            } catch (e) {
-              query = toolCall.function.arguments;
-            }
-
-            if (query) {
-              console.log(`[AI Agent] Выполняем веб-поиск: "${query}"`);
-              performedSearches.push(query);
-              const searchResults = await searchWeb(query, config.search.maxResults);
-
-              conversation.push({
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                name: 'search_web',
-                content: JSON.stringify(searchResults, null, 2),
-              });
-            }
-          }
-        }
-
-        const finalResponse = await openai.chat.completions.create({
-          model: currentModel,
-          messages: conversation,
-          temperature: 0.4,
-        });
-
-        const finalChoice = finalResponse.choices && finalResponse.choices[0];
-        const finalText = finalChoice && finalChoice.message ? finalChoice.message.content : '';
-
-        return {
-          text: sanitizeAssistantResponse(finalText) || 'Анализ завершен.',
-          modelUsed: currentModel,
-          searches: performedSearches,
-        };
-      }
-
-      // 2. Проверка текстовых псевдо-тегов (<toolcall>, <tool_call>, [TOOL_CALLS])
-      const extractedToolCalls = extractToolCallsFromText(content);
-      if (extractedToolCalls.length > 0) {
-        console.log(`[AI Agent] Перехвачен текстовый вызов инструмента (${extractedToolCalls.length})`);
-        
-        let hasNewData = false;
-        for (const extracted of extractedToolCalls) {
-          const query = extracted.query;
-          if (query && !performedSearches.includes(query)) {
-            console.log(`[AI Agent] Выполняем поиск по перехваченному запросу: "${query}"`);
-            performedSearches.push(query);
-            const searchResults = await searchWeb(query, config.search.maxResults);
-
-            conversation.push({
-              role: 'assistant',
-              content: responseMessage.content,
-            });
-
-            conversation.push({
-              role: 'user',
-              content: `[Результаты веб-поиска по рынку (${query})]:\n${JSON.stringify(searchResults, null, 2)}\n\nПожалуйста, используя эти найденные отраслевые бенчмарки и исходные метрики CRM, сформируй полный структурированный отчет аудита для собственника бизнеса.`,
-            });
-            hasNewData = true;
-          }
-        }
-
-        if (hasNewData) {
-          const finalResponse = await openai.chat.completions.create({
-            model: currentModel,
-            messages: conversation,
-            temperature: 0.4,
-          });
-
-          const finalChoice = finalResponse.choices && finalResponse.choices[0];
-          const finalText = finalChoice && finalChoice.message ? finalChoice.message.content : '';
-
-          return {
-            text: sanitizeAssistantResponse(finalText) || 'Анализ завершен.',
-            modelUsed: currentModel,
-            searches: performedSearches,
-          };
-        }
-      }
-
+      const content = choice.message.content || '';
       const cleanText = sanitizeAssistantResponse(content);
-      if (cleanText) {
+
+      if (cleanText && cleanText.length > 50) {
         return {
           text: cleanText,
           modelUsed: currentModel,
-          searches: performedSearches,
+          searches: [],
         };
       }
 
-      throw new Error('Модель вернула только служебные теги без содержательного текста');
+      throw new Error('Модель вернула слишком короткий или пустой ответ');
     } catch (error: any) {
       console.error(`[AI Agent] Ошибка с моделью ${currentModel}:`, error.message);
       lastError = error;
@@ -272,13 +95,13 @@ export async function runAgent({
   return {
     text: '',
     modelUsed: 'Expert AI Engine (Local Fallback)',
-    searches: performedSearches,
+    searches: [],
     isFallbackGenerated: true,
   };
 }
 
 /**
- * Проведение полного бизнес-аудита по метрикам
+ * Проведение полного бизнес-аудита по метрикам с Pre-Search RAG
  */
 export async function performBusinessAudit(
   metrics: BusinessMetrics,
@@ -290,22 +113,48 @@ export async function performBusinessAudit(
     ? 'ЭКСПРЕСС-АУДИТ ТЕКУЩЕГО ПУЛЬСА ПРОДАЖ (По выборке 50 последних измененных сделок)'
     : 'ГЛОБАЛЬНЫЙ СТРАТЕГИЧЕСКИЙ АУДИТ ВСЕЙ БАЗЫ CRM (Полный срез)';
 
-  const userPrompt = `Проведи ${scopeTitle} на основе следующих метрик из CRM:
+  // 1. Pre-Search RAG: Автоматический сбор свежих отраслевых бенчмарков по нише
+  const performedSearches: string[] = [];
+  let benchmarksContext = 'Отраслевые бенчмарки: используются стандартные нормы B2B/B2C продаж.';
+
+  if (niche && niche !== 'Не указана') {
+    const searchQuery = `средняя конверсия воронки продаж ${niche} бенчмарки средний чек`;
+    console.log(`[Pre-Search RAG] Сбор отраслевых данных из сети: "${searchQuery}"`);
+    performedSearches.push(searchQuery);
+
+    try {
+      const searchResults = await searchWeb(searchQuery, config.search.maxResults);
+      if (searchResults && searchResults.length > 0) {
+        benchmarksContext = searchResults
+          .map((r, idx) => `[Источник ${idx + 1}: ${r.title}]\n${r.snippet}`)
+          .join('\n\n');
+      }
+    } catch (e: any) {
+      console.warn(`[Pre-Search RAG] Поиск не удался:`, e.message);
+    }
+  }
+
+  // 2. Формирование обогащенного промпта со всеми данными (CRM + Рынок)
+  const userPrompt = `Проведи ${scopeTitle} на основе следующих данных:
 
 СФЕРА БИЗНЕСА: ${niche}
 ТИП ВЫБОРКИ: ${isRecent ? '50 последних активных сделок (недавние изменения)' : 'Вся база CRM'}
 
-ДАННЫЕ ИЗ CRM:
+📊 МЕТРИКИ ИЗ CRM:
 ${JSON.stringify(metrics, null, 2)}
 
-Пожалуйста, используй инструмент search_web для поиска бенчмарков в нише "${niche}" (если ниша указана), и выдай структурированный отчет для собственника бизнеса с конкретным планом действий на 7 дней.`;
+🌐 АКТУАЛЬНЫЕ РЫНОЧНЫЕ БЕНЧМАРКИ ПО НИШЕ "${niche}":
+${benchmarksContext}
+
+Пожалуйста, сопоставь фактические показатели компании с рыночными бенчмарками и составь подробный структурированный отчет для собственника бизнеса с конкретным планом действий (Quick Wins) на 7 дней.`;
 
   const aiResult = await runAgent({
     messages: [{ role: 'user', content: userPrompt }],
     systemPrompt: SYSTEM_PROMPT_ANALYST,
-    enableSearch: true,
     onModelSwitch,
   });
+
+  aiResult.searches = performedSearches;
 
   // Если сработал локальный аналитический движок (при сбое прокси/OpenRouter)
   if (aiResult.isFallbackGenerated || !aiResult.text) {
@@ -324,9 +173,25 @@ export async function askAIQuestion(
   chatHistory: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [],
   niche = 'Не указана'
 ): Promise<AIAgentResponse> {
+  let benchmarksContext = '';
+  const performedSearches: string[] = [];
+
+  // Если в вопросе запрашиваются нормы рынка/конкуренты, делаем быстрый пре-поиск
+  const lowerQ = question.toLowerCase();
+  if (lowerQ.includes('рынок') || lowerQ.includes('конверси') || lowerQ.includes('бенчмарк') || lowerQ.includes('норма')) {
+    const query = `${niche} ${question}`.slice(0, 100);
+    performedSearches.push(query);
+    try {
+      const results = await searchWeb(query, 2);
+      if (results && results.length > 0) {
+        benchmarksContext = `\n\nДанные из поисковой выдачи:\n` + results.map(r => `• ${r.title}: ${r.snippet}`).join('\n');
+      }
+    } catch (_) {}
+  }
+
   const contextMessage = metrics
-    ? `Контекст метрик CRM пользователя (ниша: ${niche}, режим: ${metrics.scope || 'recent'}):\n${JSON.stringify(metrics, null, 2)}`
-    : `Контекст: CRM еще не подключена или метрики отсутствуют.`;
+    ? `Контекст метрик CRM пользователя (ниша: ${niche}, режим: ${metrics.scope || 'recent'}):\n${JSON.stringify(metrics, null, 2)}${benchmarksContext}`
+    : `Контекст: CRM еще не подключена или метрики отсутствуют.${benchmarksContext}`;
 
   const messages: any[] = [
     { role: 'system', content: `${SYSTEM_PROMPT_CHAT}\n\n${contextMessage}` },
@@ -337,8 +202,9 @@ export async function askAIQuestion(
   const aiResult = await runAgent({
     messages,
     systemPrompt: SYSTEM_PROMPT_CHAT,
-    enableSearch: true,
   });
+
+  aiResult.searches = performedSearches;
 
   if (aiResult.isFallbackGenerated || !aiResult.text) {
     aiResult.text = generateConsultantResponse(question, metrics, niche);
