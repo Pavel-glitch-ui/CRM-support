@@ -9,6 +9,8 @@ import {
   handleManagers,
   handleBenchmarks,
   handleRefreshMetrics,
+  handleExportMarkdown,
+  handleDownloadPdf,
 } from './handlers/audit';
 import { handleTextMessage } from './handlers/chat';
 import { state } from '../state';
@@ -51,6 +53,8 @@ export function createBot(): Telegraf {
   bot.action('action_managers', handleManagers);
   bot.action('action_benchmarks', handleBenchmarks);
   bot.action('action_refresh_metrics', handleRefreshMetrics);
+  bot.action('action_export_md', handleExportMarkdown);
+  bot.action('action_download_pdf', handleDownloadPdf);
 
   bot.action('action_chat_ai', async (ctx) => {
     const chatId = ctx.chat?.id;

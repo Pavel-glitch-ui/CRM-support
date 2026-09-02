@@ -12,6 +12,7 @@ class StateManager {
         credentials: null,
         niche: null,
         metricsCache: null,
+        lastAuditReport: null,
         chatHistory: [],
       });
     }
@@ -36,6 +37,7 @@ class StateManager {
       credentials,
       step: 'IDLE',
       metricsCache: null,
+      lastAuditReport: null,
     });
   }
 
@@ -45,6 +47,13 @@ class StateManager {
 
   public setMetrics(chatId: string | number, metrics: BusinessMetrics): void {
     this.set(chatId, { metricsCache: metrics });
+  }
+
+  public setLastAuditReport(
+    chatId: string | number,
+    report: { text: string; searches: string[]; scope: 'recent' | 'full'; createdAt: string }
+  ): void {
+    this.set(chatId, { lastAuditReport: report });
   }
 
   public appendChat(chatId: string | number, role: 'user' | 'assistant', content: string): void {
@@ -65,6 +74,7 @@ class StateManager {
       credentials: null,
       niche: null,
       metricsCache: null,
+      lastAuditReport: null,
       chatHistory: [],
     };
     this.sessions.set(id, cleanSession);

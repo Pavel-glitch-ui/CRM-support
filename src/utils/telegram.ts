@@ -120,6 +120,39 @@ export async function sendAuditTxtFile(
 }
 
 /**
+ * Отправка полного отчета в виде структурированного Markdown-файла .md (нативный быстрый просмотр в Telegram)
+ */
+export async function sendAuditMdFile(
+  ctx: Context,
+  mdContent: string,
+  filenamePrefix = 'CRM_Full_Audit',
+  caption = '⚡ *Полный отчет сформирован в формате .md (открывается мгновенно в Telegram)*',
+  extra: any = {}
+): Promise<void> {
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const cleanPrefix = filenamePrefix.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const filename = `${cleanPrefix}_${dateStr}.md`;
+
+  const fileBuffer = Buffer.from(mdContent, 'utf-8');
+
+  const safeCaption = caption.length > MAX_CAPTION_LENGTH
+    ? caption.slice(0, MAX_CAPTION_LENGTH - 3) + '...'
+    : caption;
+
+  await ctx.replyWithDocument(
+    {
+      source: fileBuffer,
+      filename,
+    },
+    {
+      caption: safeCaption,
+      parse_mode: 'Markdown',
+      ...extra,
+    }
+  );
+}
+
+/**
  * Отправка полного отчета в виде брендированного PDF-документа
  */
 export async function sendAuditPdfFile(

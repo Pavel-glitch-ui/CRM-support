@@ -9,8 +9,8 @@ export const Keyboards = {
   ]),
 
   // Главное аналитическое меню
-  mainMenu: (hasMetrics: boolean = false) =>
-    Markup.inlineKeyboard([
+  mainMenu: (hasMetrics: boolean = false) => {
+    const buttons = [
       [
         Markup.button.callback('⚡ Экспресс-аудит (последние 50)', 'action_recent_audit'),
       ],
@@ -23,11 +23,22 @@ export const Keyboards = {
       ],
       [Markup.button.callback('🔍 Бенчмарки рынка (Web Search)', 'action_benchmarks')],
       [Markup.button.callback('💬 Задать вопрос ИИ-консультанту', 'action_chat_ai')],
-      [
-        Markup.button.callback('🏢 Сменить нишу', 'action_set_niche'),
-        Markup.button.callback('🔄 Сменить CRM', 'action_change_crm'),
-      ],
-    ]),
+    ];
+
+    if (hasMetrics) {
+      buttons.push([
+        Markup.button.callback('📥 Скачать сводку данных (.md)', 'action_export_md'),
+        Markup.button.callback('📄 Скачать отчет (PDF)', 'action_download_pdf'),
+      ]);
+    }
+
+    buttons.push([
+      Markup.button.callback('🏢 Сменить нишу', 'action_set_niche'),
+      Markup.button.callback('🔄 Сменить CRM', 'action_change_crm'),
+    ]);
+
+    return Markup.inlineKeyboard(buttons);
+  },
 
   // Навигация назад в главное меню
   backToMenu: Markup.inlineKeyboard([
@@ -36,6 +47,10 @@ export const Keyboards = {
 
   // Кнопки после получения отчета
   afterAuditMenu: Markup.inlineKeyboard([
+    [
+      Markup.button.callback('⚡ Скачать полный отчет (.md)', 'action_export_md'),
+      Markup.button.callback('📄 Скачать PDF-отчет', 'action_download_pdf'),
+    ],
     [Markup.button.callback('💬 Задать вопрос по отчету', 'action_chat_ai')],
     [Markup.button.callback('📊 Обновить метрики из CRM', 'action_refresh_metrics')],
     [Markup.button.callback('⬅️ В главное меню', 'nav_main_menu')],

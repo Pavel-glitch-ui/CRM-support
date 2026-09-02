@@ -7,8 +7,9 @@ import { aggregateBitrixMetrics, aggregateAmoMetrics } from '../../crm/aggregato
 import { performBusinessAudit, generateExecutiveSummary } from '../../ai/agent';
 import { searchWeb } from '../../ai/tools/search';
 import { BusinessMetrics } from '../../types';
-import { sendSafeText, sendAuditTxtFile, sendAuditPdfFile } from '../../utils/telegram';
+import { sendSafeText, sendAuditTxtFile, sendAuditPdfFile, sendAuditMdFile } from '../../utils/telegram';
 import { generateAuditPdf } from '../../services/pdf';
+import { generateAuditMarkdown } from '../../services/markdown';
 
 /**
  * 1. Получение экспресс-метрик по 50 последним измененным сделкам
@@ -147,12 +148,20 @@ export async function handleRecentAudit(ctx: Context) {
 
     const fullReportText = auditResult.text + searchesNote;
 
+    // 0. Сохраняем аудит в сессию для повторного быстрого экспорта
+    state.setLastAuditReport(chatId, {
+      text: fullReportText,
+      searches: auditResult.searches || [],
+      scope: 'recent',
+      createdAt: new Date().toISOString(),
+    });
+
     try {
       await ctx.telegram.editMessageText(
         chatId,
         statusMsg.message_id,
         undefined,
-        `📄 *Верстка официального PDF-отчета и подготовка резюме...*\n\n` +
+        `📄 *Подготовка полного отчета (.md) и резюме...*\n\n` +
         `_Почти готово! Прикрепляю документ и резюме..._`,
         { parse_mode: 'Markdown' }
       );
@@ -173,18 +182,18 @@ export async function handleRecentAudit(ctx: Context) {
     // 2. Отправляем лаконичное Executive Summary в чат
     await sendSafeText(ctx, executiveSummary);
 
-    // 3. Генерируем и прикрепляем полный брендированный PDF-документ
+    // 3. Генерируем и прикрепляем полный брендированный .md документ (мгновенное открытие в Telegram)
     try {
-      const pdfBuffer = await generateAuditPdf(metrics, fullReportText, session.niche);
-      await sendAuditPdfFile(
+      const mdContent = generateAuditMarkdown(metrics, fullReportText, session.niche, auditResult.searches);
+      await sendAuditMdFile(
         ctx,
-        pdfBuffer,
+        mdContent,
         `CRM_Recent_Audit_${metrics.portalOrDomain || 'Report'}`,
-        `📄 *Официальный PDF-отчет экспресс-аудита прикреплен выше.*\n\n_Задайте вопрос ИИ по отчету через кнопку ниже:_`,
+        `⚡ *Полный отчет экспресс-аудита (.md)*\n\n_Файл открывается мгновенно в Telegram. Вы также можете скачать PDF-версию по кнопке ниже:_`,
         Keyboards.afterAuditMenu
       );
-    } catch (pdfErr: any) {
-      console.warn('[PDF Generation Warning] Падение PDF, отправляем .txt резерв:', pdfErr.message);
+    } catch (mdErr: any) {
+      console.warn('[Markdown Generation Warning] Ошибка генерации MD:', mdErr.message);
       await sendAuditTxtFile(
         ctx,
         fullReportText,
@@ -288,12 +297,20 @@ export async function handleFullStreamAudit(ctx: Context) {
 
     const fullReportText = auditResult.text + searchesNote;
 
+    // 0. Сохраняем аудит в сессию для повторного быстрого экспорта
+    state.setLastAuditReport(chatId, {
+      text: fullReportText,
+      searches: auditResult.searches || [],
+      scope: 'full',
+      createdAt: new Date().toISOString(),
+    });
+
     try {
       await ctx.telegram.editMessageText(
         chatId,
         statusMsg.message_id,
         undefined,
-        `📄 *Верстка официального PDF-отчета всей базы и подготовка резюме...*\n\n` +
+        `📄 *Подготовка полного отчета (.md) всей базы и резюме...*\n\n` +
         `_Почти готово! Прикрепляю документ и резюме..._`,
         { parse_mode: 'Markdown' }
       );
@@ -314,18 +331,18 @@ export async function handleFullStreamAudit(ctx: Context) {
     // 2. Отправляем лаконичное Executive Summary в чат
     await sendSafeText(ctx, executiveSummary);
 
-    // 3. Генерируем и прикрепляем брендированный PDF-документ всей базы
+    // 3. Генерируем и прикрепляем брендированный .md документ всей базы
     try {
-      const pdfBuffer = await generateAuditPdf(metrics, fullReportText, session.niche);
-      await sendAuditPdfFile(
+      const mdContent = generateAuditMarkdown(metrics, fullReportText, session.niche, auditResult.searches);
+      await sendAuditMdFile(
         ctx,
-        pdfBuffer,
+        mdContent,
         `CRM_Full_Strategic_Audit_${metrics.portalOrDomain || 'Report'}`,
-        `📄 *Официальный PDF-отчет стратегического аудита всей базы CRM прикреплен выше.*\n\n_Задайте вопрос ИИ по отчету через кнопку ниже:_`,
+        `⚡ *Полный стратегический аудит всей базы (.md)*\n\n_Файл открывается мгновенно в Telegram. Вы также можете скачать PDF-версию по кнопке ниже:_`,
         Keyboards.afterAuditMenu
       );
-    } catch (pdfErr: any) {
-      console.warn('[PDF Generation Warning] Падение PDF, отправляем .txt резерв:', pdfErr.message);
+    } catch (mdErr: any) {
+      console.warn('[Markdown Generation Warning] Ошибка генерации MD:', mdErr.message);
       await sendAuditTxtFile(
         ctx,
         fullReportText,
@@ -480,4 +497,87 @@ export async function handleRefreshMetrics(ctx: Context) {
   state.set(chatId, { metricsCache: null });
   await ctx.reply(`🔄 Метрики сброшены. Получаю свежие данные из CRM...`);
   await handleDashboard(ctx);
+}
+
+/**
+ * Экспорт полных данных и аудита в формате .md по требованию пользователя
+ */
+export async function handleExportMarkdown(ctx: Context) {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+
+  const session = state.get(chatId);
+  const metrics = session.metricsCache || await fetchRecentMetrics(chatId);
+
+  if (!metrics) {
+    await ctx.reply(`⚠️ CRM не подключена или нет данных для экспорта:`, Keyboards.chooseCrm);
+    return;
+  }
+
+  const waitMsg = await ctx.reply(`⚡ *Формирую файл .md с полными данными и аудитом...*`, { parse_mode: 'Markdown' });
+
+  try {
+    const reportText = session.lastAuditReport?.text || '';
+    const searches = session.lastAuditReport?.searches || [];
+    const mdContent = generateAuditMarkdown(metrics, reportText, session.niche, searches);
+
+    try {
+      await ctx.telegram.deleteMessage(chatId, waitMsg.message_id);
+    } catch (_) {}
+
+    await sendAuditMdFile(
+      ctx,
+      mdContent,
+      `CRM_Full_Data_${metrics.portalOrDomain || 'Report'}`,
+      `⚡ *Полные данные и аудит CRM в формате Markdown (.md)*\n\n_Файл открывается мгновенно в Telegram. Содержит сводку воронки, аудит менеджеров, точки потерь и чек-лист действий._`,
+      Keyboards.afterAuditMenu
+    );
+  } catch (err: any) {
+    console.error('[Export MD Error]', err);
+    try {
+      await ctx.telegram.deleteMessage(chatId, waitMsg.message_id);
+    } catch (_) {}
+    await ctx.reply(`⚠️ Ошибка при экспорте Markdown: ${err.message}`, Keyboards.mainMenu(true));
+  }
+}
+
+/**
+ * Скачивание официального PDF-отчета
+ */
+export async function handleDownloadPdf(ctx: Context) {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+
+  const session = state.get(chatId);
+  const metrics = session.metricsCache || await fetchRecentMetrics(chatId);
+
+  if (!metrics) {
+    await ctx.reply(`⚠️ CRM не подключена или нет данных для формирования PDF:`, Keyboards.chooseCrm);
+    return;
+  }
+
+  const waitMsg = await ctx.reply(`📄 *Верстаю официальный PDF-отчет...*`, { parse_mode: 'Markdown' });
+
+  try {
+    const reportText = session.lastAuditReport?.text || '';
+    const pdfBuffer = await generateAuditPdf(metrics, reportText, session.niche);
+
+    try {
+      await ctx.telegram.deleteMessage(chatId, waitMsg.message_id);
+    } catch (_) {}
+
+    await sendAuditPdfFile(
+      ctx,
+      pdfBuffer,
+      `CRM_Business_Audit_${metrics.portalOrDomain || 'Report'}`,
+      `📄 *Официальный PDF-отчет аудита CRM прикреплен выше.*\n\n_Задайте вопрос ИИ по отчету через кнопку ниже:_`,
+      Keyboards.afterAuditMenu
+    );
+  } catch (err: any) {
+    console.error('[Download PDF Error]', err);
+    try {
+      await ctx.telegram.deleteMessage(chatId, waitMsg.message_id);
+    } catch (_) {}
+    await ctx.reply(`⚠️ Ошибка при генерации PDF: ${err.message}`, Keyboards.mainMenu(true));
+  }
 }

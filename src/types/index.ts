@@ -78,12 +78,20 @@ export interface BusinessMetrics {
   };
 }
 
+export interface AuditReportData {
+  text: string;
+  searches: string[];
+  scope: 'recent' | 'full';
+  createdAt: string;
+}
+
 export interface UserSession {
   step: UserStep;
   crmType: CRMType | null;
   credentials: CrmCredentials | null;
   niche: string | null;
   metricsCache: BusinessMetrics | null;
+  lastAuditReport?: AuditReportData | null;
   chatHistory: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
 }
 
